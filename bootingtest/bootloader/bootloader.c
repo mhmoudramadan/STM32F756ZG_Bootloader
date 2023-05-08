@@ -59,12 +59,18 @@ static uint8 STM32F756_Get_RDP_LEVEL(void);
 /*****STM32F756_Get_WDP_LEVEL
 **@param[in] 
 **/
-static uint8 STM32F756_Get_WDP_LEVEL(void);
+static uint8 STM32F756_Get_WRP_LEVEL(void);
 
 /*****STM32F756_Change_ROP_LV
-**@param[in] 
+**@param[in] rop_level
 **/
 static uint8 STM32F756_Change_ROP_LV(uint32 rop_level);
+/*****STM32F756_Change_WRP_Activation
+**@param[in] sectors
+**@param[in] sector_code
+**@param[in] wrp_level
+**/
+static uint8 STM32F756_Change_WRP_Activation(uint8 sectors ,uint8 sector_code,uint8 wrp_level);
 
 /*****BL_Jump_To_App
 **@param[in] 
@@ -525,7 +531,7 @@ static uint8 STM32F756_Get_RDP_LEVEL(void){
 /*****STM32F756_Get_WDP_LEVEL
 **@param[in] 
 **/
-static uint8 STM32F756_Get_WDP_LEVEL(void){
+static uint8 STM32F756_Get_WRP_LEVEL(void){
 	FLASH_OBProgramInitTypeDef OBP_;
 	/*****Get the Option byte configuration******/
 	HAL_FLASHEx_OBGetConfig(&OBP_);
@@ -587,6 +593,69 @@ static uint8 STM32F756_Change_ROP_LV(uint32 rop_level){
 		}
 	}
 	return Rop_level;
+}
+/*****STM32F756_Change_WRP_Activation
+**@param[in] sectors
+**@param[in] sector_code
+**@param[in] wrp_level
+**/
+static uint8 STM32F756_Change_WRP_Activation(uint8 sectors ,uint8 sector_code,uint8 wrp_level){
+	HAL_StatusTypeDef	loc_status = HAL_ERROR;
+	FLASH_OBProgramInitTypeDef obp_;
+	uint8 wrp_activation = WRP_ACTIVATION_FAILED;
+	
+	obp_.OptionType = OPTIONBYTE_WRP;
+	obp_.WRPState =  wrp_level;
+	obp_.WRPSector = sector_code;
+	
+	if(sectors > FLASH_MAX_SECTORS){
+#if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
+			Bl_Print_Msg("you should enter valid Number sectors");
+#endif
+		return wrp_activation;  // Exit function 
+	}
+	/****** perform flash unlock******/
+	loc_status = HAL_FLASH_OB_Unlock();
+	if(loc_status != HAL_OK){
+	wrp_activation = WRP_ACTIVATION_FAILED;
+#if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
+		Bl_Print_Msg("Failed To unlock Flash");
+#endif
+	} 
+	else{
+						/*****Log message***/	
+#if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
+		Bl_Print_Msg("Passed To unlock Flash OP Register \r\n");
+#endif
+		/*** program option bytes*******/
+		loc_status = HAL_FLASHEx_OBProgram(&obp_);
+		if(HAL_OK !=  loc_status){
+#if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
+		Bl_Print_Msg("Failed program option bytes \r\n");
+#endif
+	}else{
+#if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
+		Bl_Print_Msg("passed program option bytes \r\n");
+#endif
+			/**** lanuch OB *****/
+			loc_status = HAL_FLASH_OB_Launch();
+			if(HAL_OK != loc_status){
+			wrp_activation = WRP_ACTIVATION_FAILED;
+			}else{
+			/********** lock ob flash **/
+				loc_status = HAL_FLASH_OB_Lock();
+			 if(HAL_OK != loc_status){
+			 wrp_activation = WRP_ACTIVATION_FAILED;
+			 }else{
+			 wrp_activation = WRP_ACTIVATION_SUCCESS;
+#if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
+				 Bl_Print_Msg("Write Protection Activation : 0x%X \r\n",wrp_activation);
+#endif
+			 }	
+			}
+		}
+	}
+	return wrp_activation;
 }
 
 /*****BL_Jump_To_App
@@ -942,7 +1011,7 @@ static void BL_VidWriteProtect(uint8 *Host_buffer)
 {
 		uint16 Host_cmd_packet_len = 0U;
 	uint32 Host_Crc32 = 0U;
-	uint8 RDP_level =0xEE;
+	uint8 WRP_level =0xEE;
 	
 	/***********Extract crc and command packet ***/
 	Host_cmd_packet_len = Host_buffer[0U] + 1U;
@@ -959,10 +1028,10 @@ static void BL_VidWriteProtect(uint8 *Host_buffer)
 	Bl_Print_Msg("CRC Verification Passed \r\n");
 #endif
 		BL_VidSendAck(1U);
-		/*********Read protection Level**********/
-		RDP_level = STM32F756_Get_WDP_LEVEL();
+		/*********Write protection activation Level**********/
+		WRP_level = STM32F756_Change_WRP_Activation(Host_buffer[2U],Host_buffer[3U],WRP_STATE_EN);
 		/******** Report protection level to host*******/
-		BL_VidSendReplyTo_Host((uint8*)&RDP_level,1U);
+		BL_VidSendReplyTo_Host((uint8*)&WRP_level,1U);
 	}else{
 					/*****Log message***/	
 #if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
@@ -976,6 +1045,35 @@ static void BL_VidWriteProtect(uint8 *Host_buffer)
 **/
 static void BL_VidWriteUnProtect(uint8 *Host_buffer)
 {
+	uint16 Host_cmd_packet_len = 0U;
+	uint32 Host_Crc32 = 0U;
+	uint8 WRP_LEVEL = 0U;
+	
+	/**************** Extract CRC and Command Packet******/
+	Host_cmd_packet_len = Host_buffer[0U]+1U;
+	Host_Crc32 = *((uint32*)((Host_buffer + Host_cmd_packet_len) - CRC_SIZE_BYTE));
+			/*****Log message***/	
+#if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
+	Bl_Print_Msg("Disable Write Protection Level \r\n");
+#endif
+	/*********Crc verification ***********/ 
+	if(CRC_VERFIY_SUCCESS == BL_uint8CRC_Verify((uint8 *)&Host_buffer[0U],Host_cmd_packet_len -4U , Host_Crc32)){
+			/*****Log message***/	
+#if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
+	Bl_Print_Msg("CRC Verification Passed \r\n");
+#endif
+		BL_VidSendAck(1U);
+		/*******Diable Write protection******/
+		WRP_LEVEL = STM32F756_Change_WRP_Activation(Host_buffer[2U],Host_buffer[3U],WRP_STATE_DIS);
+		/******** Report Write Protection Level***/
+		BL_VidSendReplyTo_Host((uint8*)&WRP_LEVEL ,1U);
+}else{
+					/*****Log message***/	
+#if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
+	Bl_Print_Msg("CRC Verification Failed \r\n");
+#endif
+		BL_VidSendNack();
+	}
 }
 /*****BL_VidReadOutProtect 
 **@param[in] Host_buffer pointer to data
@@ -992,7 +1090,7 @@ static void BL_VidReadOutProtect(uint8 *Host_buffer)
 	
 		/*****Log message***/	
 #if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
-	Bl_Print_Msg("Read Protection Level \r\n");
+	Bl_Print_Msg("Enable Read Protection Level \r\n");
 #endif
 	/*********Crc verification ***********/ 
 	if(CRC_VERFIY_SUCCESS == BL_uint8CRC_Verify((uint8 *)&Host_buffer[0U],Host_cmd_packet_len -4U , Host_Crc32)){
@@ -1029,7 +1127,7 @@ static void BL_VidReadOutUnProtect(uint8 *Host_buffer)
 	
 		/*****Log message***/	
 #if DEBUG_INFO_ENABLE == BL_DEBUG_INFO
-	Bl_Print_Msg("change Read Protection Level \r\n");
+	Bl_Print_Msg("Disable Read Protection Level \r\n");
 #endif
 	/*********Crc verification ***********/ 
 	if(CRC_VERFIY_SUCCESS == BL_uint8CRC_Verify((uint8 *)&Host_buffer[0U],Host_cmd_packet_len -4U , Host_Crc32)){
