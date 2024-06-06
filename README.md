@@ -6,9 +6,8 @@
 </div>
 
 
-# STM32F756ZG Custom Bootloader
-
-    ![1717668886032](image/README/1717668886032.png)
+# 
+    STM32F756ZG Custom Bootloader
 
 ## Table of Contents
 
