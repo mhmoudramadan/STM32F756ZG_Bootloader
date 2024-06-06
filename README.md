@@ -28,7 +28,7 @@ Custom Bootloader Impelmentation For STM32F756ZG Microcontroller using Universal
 These instructions will get you a copy of the project up and running on your local machine for development.
 
 ```
-it clone https://github.com/mhmoudramadan/STM32F756ZG_Bootloader.git
+git clone https://github.com/mhmoudramadan/STM32F756ZG_Bootloader.git
 ```
 
 These instructions will get you how to install Python package for Host script.
